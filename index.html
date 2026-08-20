@@ -29,6 +29,7 @@
       padding: 0 16px;
       gap: 12px;
       flex-shrink: 0;
+      flex-wrap: wrap;
     }
     .btn {
       background: var(--bg);
@@ -40,6 +41,7 @@
       font-size: 13px;
       transition: .2s;
       font-family: inherit;
+      white-space: nowrap;
     }
     .btn:hover { border-color: var(--accent); }
     .btn.primary { background: var(--accent); color: #000; border: none; font-weight: 600; }
@@ -127,6 +129,34 @@
     }
     .bottom-bar .status { color: var(--accent); }
     .badge { font-size: 11px; background: #1a1a2e; padding: 2px 10px; border-radius: 12px; }
+
+    .export-selector {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 3px 8px;
+    }
+    .export-selector label {
+      font-size: 12px;
+      color: #888;
+      cursor: pointer;
+    }
+    .export-selector input[type="radio"] {
+      accent-color: var(--accent);
+      cursor: pointer;
+      width: 14px;
+      height: 14px;
+    }
+    #fileInput { display: none; }
+    .header-separator {
+      width: 1px;
+      height: 28px;
+      background: var(--border);
+      flex-shrink: 0;
+    }
   </style>
 </head>
 <body>
@@ -137,8 +167,16 @@
   <div style="flex:1"></div>
   <button class="btn primary" id="compileBtn">▶ 编译并播放</button>
   <button class="btn" id="stopBtn">⏹ 停止</button>
-  <button class="btn" id="exportBtn">💾 导出 WAV</button>
-  <button class="btn" id="loadDemoBtn">📄 加载示例</button>
+  <div class="export-selector">
+    <label><input type="radio" name="exportFormat" value="wav" checked> WAV</label>
+    <label><input type="radio" name="exportFormat" value="mp3"> MP3</label>
+  </div>
+  <button class="btn" id="exportBtn">💾 导出音频</button>
+  <div class="header-separator"></div>
+  <button class="btn" id="exportJsonBtn">📤 导出 JSON</button>
+  <button class="btn" id="importBtn">📂 导入 JSON</button>
+  <button class="btn" id="loadDemoBtn">📄 示例</button>
+  <input type="file" id="fileInput" accept=".json">
 </div>
 
 <div class="main">
@@ -165,6 +203,8 @@
   <span style="font-size:11px;color:#444;">Ctrl+Enter 编译播放</span>
 </div>
 
+<script src="https://cdn.jsdelivr.net/npm/lamejs@1.2.1/lame.min.js">
+</script>
 <script>
   (function() {
     // ----- DOM refs -----
@@ -173,6 +213,8 @@
     const segmentCount = document.getElementById('segmentCount');
     const durationDisplay = document.getElementById('durationDisplay');
     const playStatus = document.getElementById('playStatus');
+    const exportFormatRadios = document.querySelectorAll('input[name="exportFormat"]');
+    const fileInput = document.getElementById('fileInput');
 
     // ----- 音频引擎 -----
     let audioCtx = null;
@@ -294,7 +336,7 @@
       return { ok: false, msg: `日期格式 "${dateStr}" 不符合 YYYY-MM-DD, YYYY-MM, YYYY 格式` };
     }
 
-    // ----- 编译 BeatCode JSON (macro 可选) -----
+    // ----- 编译 BeatCode JSON -----
     function compileBeatCode(jsonStr) {
       let errors = [];
       let warnings = [];
@@ -304,7 +346,6 @@
       try {
         const data = JSON.parse(jsonStr);
 
-        // 1. 解析 manifest
         if (!data.manifest || !data.manifest.project) {
           errors.push('❌ manifest.project 是必填字段');
         } else {
@@ -317,7 +358,6 @@
           }
         }
 
-        // 2. 解析 macro (可选)
         const macros = {};
         if (data.macro) {
           for (const [macroName, macroData] of Object.entries(data.macro)) {
@@ -338,7 +378,6 @@
           }
         }
 
-        // 3. 解析 music
         if (!data.music || !Array.isArray(data.music)) {
           errors.push('❌ music 必须是数组');
           return { segments, errors, warnings, manifest, ok: false };
@@ -559,19 +598,12 @@
       if (masterGain) { masterGain.disconnect(); masterGain = null; }
     }
 
-    // ----- 导出 WAV -----
-    function exportWav(segs, manifest) {
-      if (!segs || segs.length === 0) {
-        alert('没有片段可导出');
-        return;
-      }
+    // ----- 导出音频 -----
+    function renderAudioBuffer(segs, sampleRate) {
       const totalDur = getTotalDuration(segs);
-      if (totalDur <= 0) return;
-
-      const sampleRate = 44100;
+      if (totalDur <= 0) return null;
       const totalSamples = Math.floor(totalDur * sampleRate);
       const buffer = new Float32Array(totalSamples);
-
       for (let i = 0; i < totalSamples; i++) {
         const t = i / sampleRate;
         let mix = 0;
@@ -583,14 +615,23 @@
         }
         buffer[i] = Math.tanh(mix * 0.6) * 0.9;
       }
+      return buffer;
+    }
 
+    function getExportFilename(manifest, ext) {
       let filename = manifest?.project || 'beatcode';
       if (manifest?.author) filename += `_${manifest.author}`;
       if (manifest?.date) filename += `_${manifest.date}`;
       if (manifest?.name) filename += `_${manifest.name}`;
       filename = filename.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '_');
+      return `${filename}.${ext}`;
+    }
 
-      downloadWav(buffer, sampleRate, filename);
+    function exportWav(segs, manifest) {
+      const sampleRate = 44100;
+      const audioBuffer = renderAudioBuffer(segs, sampleRate);
+      if (!audioBuffer) return;
+      downloadWav(audioBuffer, sampleRate, getExportFilename(manifest, 'wav'));
     }
 
     function downloadWav(audioBuffer, sampleRate, filename) {
@@ -628,9 +669,113 @@
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${filename || 'beatcode'}.wav`;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(url);
+    }
+
+    function exportMp3(segs, manifest) {
+      if (typeof lamejs === 'undefined') {
+        alert('⚠️ MP3 编码库加载失败，请检查网络连接后重试');
+        return;
+      }
+      const sampleRate = 44100;
+      const audioBuffer = renderAudioBuffer(segs, sampleRate);
+      if (!audioBuffer) return;
+
+      const mp3encoder = new lamejs.Mp3Encoder(1, sampleRate, 192);
+      const samples = new Int16Array(audioBuffer.length);
+      for (let i = 0; i < audioBuffer.length; i++) {
+        const s = Math.max(-1, Math.min(1, audioBuffer[i]));
+        samples[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+
+      const mp3Data = [];
+      const blockSize = 1152;
+      for (let i = 0; i < samples.length; i += blockSize) {
+        const chunk = samples.subarray(i, i + blockSize);
+        const mp3buf = mp3encoder.encodeBuffer(chunk);
+        if (mp3buf.length > 0) mp3Data.push(new Int8Array(mp3buf));
+      }
+      const mp3buf = mp3encoder.flush();
+      if (mp3buf.length > 0) mp3Data.push(new Int8Array(mp3buf));
+
+      const blob = new Blob(mp3Data, { type: 'audio/mp3' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = getExportFilename(manifest, 'mp3');
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function exportAudio() {
+      if (currentSegments.length === 0) {
+        alert('请先编译或加载示例');
+        return;
+      }
+      let format = 'wav';
+      for (const radio of exportFormatRadios) {
+        if (radio.checked) { format = radio.value; break; }
+      }
+      if (format === 'mp3') {
+        exportMp3(currentSegments, lastManifest);
+      } else {
+        exportWav(currentSegments, lastManifest);
+      }
+    }
+
+    // ----- 导出 JSON -----
+    function exportJson() {
+      const content = jsonInput.value.trim();
+      if (!content) {
+        alert('没有可导出的 JSON 内容');
+        return;
+      }
+      try {
+        const data = JSON.parse(content);
+        const projectName = data?.manifest?.project || 'beatcode';
+        const filename = projectName.replace(/[^a-zA-Z0-9_\u4e00-\u9fa5]/g, '_') + '.json';
+        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        a.click();
+        URL.revokeObjectURL(url);
+        logOutput.innerHTML += `\n<span class="ok">✅ JSON 已导出为: ${filename}</span>`;
+      } catch(e) {
+        alert('❌ JSON 格式无效，无法导出: ' + e.message);
+      }
+    }
+
+    // ----- 导入 JSON -----
+    function importJsonFile(file) {
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const content = e.target.result;
+          JSON.parse(content);
+          jsonInput.value = content;
+          logOutput.innerHTML = '<span class="ok">✅ JSON 文件导入成功，点击「编译并播放」或按 Ctrl+Enter 开始</span>';
+          const result = compileBeatCode(content);
+          lastManifest = result.manifest;
+          renderLog(result);
+          if (result.ok && result.segments.length > 0) {
+            currentSegments = result.segments;
+            playStatus.textContent = '⏹ 已就绪 (点击播放)';
+            segmentCount.textContent = `片段: ${result.segments.length}`;
+            const totalDur = getTotalDuration(result.segments);
+            durationDisplay.textContent = `时长: ${totalDur.toFixed(2)}s`;
+          }
+        } catch(err) {
+          logOutput.innerHTML = `<span class="err">❌ 导入失败: ${err.message}</span>`;
+        }
+      };
+      reader.onerror = function() {
+        logOutput.innerHTML = '<span class="err">❌ 读取文件失败</span>';
+      };
+      reader.readAsText(file);
     }
 
     // ----- 主流程 -----
@@ -638,7 +783,7 @@
     function compileAndPlay() {
       const jsonStr = jsonInput.value;
       if (!jsonStr.trim()) {
-        logOutput.innerHTML = '<span class="warn">⚠️ 请先输入或加载 BeatCode JSON</span>';
+        logOutput.innerHTML = '<span class="warn">⚠️ 请先输入、导入或加载 BeatCode JSON</span>';
         return;
       }
       const result = compileBeatCode(jsonStr);
@@ -695,7 +840,6 @@
       }
     }
 
-    // ----- 重置状态 -----
     function resetToBlank() {
       jsonInput.value = '';
       logOutput.innerHTML = '等待编译…';
@@ -709,14 +853,19 @@
     // ----- 事件绑定 -----
     document.getElementById('compileBtn').addEventListener('click', compileAndPlay);
     document.getElementById('stopBtn').addEventListener('click', stopPlayback);
-    document.getElementById('exportBtn').addEventListener('click', () => {
-      if (currentSegments.length === 0) {
-        alert('请先编译或加载示例');
-        return;
-      }
-      exportWav(currentSegments, lastManifest);
-    });
+    document.getElementById('exportBtn').addEventListener('click', exportAudio);
+    document.getElementById('exportJsonBtn').addEventListener('click', exportJson);
     document.getElementById('loadDemoBtn').addEventListener('click', loadDemo);
+
+    document.getElementById('importBtn').addEventListener('click', () => {
+      fileInput.click();
+    });
+    fileInput.addEventListener('change', (e) => {
+      if (e.target.files.length > 0) {
+        importJsonFile(e.target.files[0]);
+        e.target.value = '';
+      }
+    });
 
     document.addEventListener('keydown', (e) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -725,7 +874,6 @@
       }
     });
 
-    // ----- 启动时完全空白 -----
     resetToBlank();
   })();
 </script>
